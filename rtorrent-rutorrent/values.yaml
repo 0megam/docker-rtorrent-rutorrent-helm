@@ -1,0 +1,221 @@
+initContainers:
+  copy-rtorrent-config:
+    image: busybox
+    command: ["sh", "-c", "mkdir -p /data/rtorrent; cp /config/.rtorrent.rc /data/rtorrent/"]
+    volumeMounts:
+    - name: rtorrent-rutorrent-config
+      mountPath: /config
+    - name: data
+      mountPath: /data
+
+
+persistence:
+  data:
+    enabled: true
+    type: hostPath
+    hostPath: /root/rtorrent-k8s-config
+    mountPath: /data
+    sizeLimit: 1Gi
+  downloads-ext:
+    enabled: true
+    type: hostPath
+    hostPath: /mnt/downloads/external 
+    mountPath: /downloads/external
+  downloads-int:
+    enabled: true
+    type: hostPath
+    hostPath: /mnt/downloads/internal
+    mountPath: /downloads/internal
+
+
+
+controller:
+  enabled: true
+  type: deployment
+  replicas: 1
+  revisionHistoryLimit: 3
+
+# -- Probe configuration
+# -- [[ref]](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/)
+# @default -- See below
+probes:
+  # -- Liveness probe configuration
+  # @default -- See below
+  liveness:
+    # -- Enable the liveness probe
+    enabled: true
+    # -- Set this to `true` if you wish to specify your own livenessProbe
+    custom: false
+    # -- The spec field contains the values for the default livenessProbe.
+    # If you selected `custom: true`, this field holds the definition of the livenessProbe.
+    # @default -- See below
+    spec:
+      initialDelaySeconds: 0
+      periodSeconds: 10
+      timeoutSeconds: 1
+      failureThreshold: 3
+
+  # -- Redainess probe configuration
+  # @default -- See below
+  readiness:
+    # -- Enable the readiness probe
+    enabled: false
+    # -- Set this to `true` if you wish to specify your own readinessProbe
+    custom: false
+    # -- The spec field contains the values for the default readinessProbe.
+    # If you selected `custom: true`, this field holds the definition of the readinessProbe.
+    # @default -- See below
+    spec:
+      initialDelaySeconds: 0
+      periodSeconds: 10
+      timeoutSeconds: 1
+      failureThreshold: 3
+
+  # -- Startup probe configuration
+  # @default -- See below
+  startup:
+    # -- Enable the startup probe
+    enabled: false
+    # -- Set this to `true` if you wish to specify your own startupProbe
+    custom: false
+    # -- The spec field contains the values for the default startupProbe.
+    # If you selected `custom: true`, this field holds the definition of the startupProbe.
+    # @default -- See below
+    spec:
+      initialDelaySeconds: 0
+      timeoutSeconds: 1
+      ## This means it has a maximum of 5*30=150 seconds to start up before it fails
+      periodSeconds: 5
+      failureThreshold: 30
+
+
+service:
+  main:
+    enabled: true
+    primary: true
+    nameOverride:
+    type: ClusterIP
+    ports:
+      http:
+        enabled: true
+        primary: true
+        port: 8080
+        protocol: TCP
+        targetPort: 8080
+  rtorrent:
+    enabled: true
+    type: NodePort
+    ports:
+      rtorrent-port:
+        enabled: true
+        port: 47161
+        protocol: TCP
+        targetPort: 47161
+        nodePort: 32500
+
+image:
+  repository: crazymax/rtorrent-rutorrent 
+  tag: 3.10-0.9.8-0.13.8
+  pullPolicy: IfNotPresent
+
+
+configmap:
+  config:
+    enabled: true
+    labels: {}
+    annotations: {}
+    data: 
+      .rtorrent.rc: |
+        directory.default.set = /downloads
+        # Listening port for incoming peer traffic
+        network.port_range.set = 47161-47161
+        network.port_random.set = no
+        # Maximum and minimum number of peers to connect to per torrent
+        throttle.min_peers.normal.set = 1
+        throttle.max_peers.normal.set = 500
+        # Same as above but for seeding completed torrents (-1 = same as downloading)
+        throttle.min_peers.seed.set = 1
+        throttle.max_peers.seed.set = 500
+        # Maximum number of simultanious uploads per torrent
+        throttle.max_uploads.set = 250
+        # Global upload and download rate in KiB. "0" for unlimited
+        throttle.global_down.max_rate.set_kb = 0
+        throttle.global_up.max_rate.set_kb = 0
+        # Enable DHT support for trackerless torrents or when all trackers are down
+        # May be set to "disable" (completely disable DHT), "off" (do not start DHT),
+        # "auto" (start and stop DHT as needed), or "on" (start DHT immediately)
+        dht.mode.set = disable
+        # Enable peer exchange (for torrents not marked private)
+        protocol.pex.set = yes
+        # Check hash for finished torrents. Might be usefull until the bug is
+        # fixed that causes lack of diskspace not to be properly reported
+        pieces.hash.on_completion.set = yes
+        # Set whether the client should try to connect to UDP trackers
+        trackers.use_udp.set = yes
+        # Set the max amount of memory address space used to mapping file chunks. This refers to memory mapping, not
+        # physical memory allocation. Default: 1GB (max_memory_usage)
+        # This may also be set using ulimit -m where 3/4 will be allocated to file chunks
+        #pieces.memory.max.set = 1GB
+        # Alternative calls to bind and ip that should handle dynamic ip's
+        #schedule2 = ip_tick,0,1800,ip=rakshasa
+        #schedule2 = bind_tick,0,1800,bind=rakshasa
+        # Encryption options, set to none (default) or any combination of the following:
+        # allow_incoming, try_outgoing, require, require_RC4, enable_retry, prefer_plaintext
+        protocol.encryption.set = require,require_RC4
+        # Set the umask for this process, which is applied to all files created by the program
+        system.umask.set = 0022
+        # Add a preferred filename encoding to the list
+        encoding.add = UTF-8
+        # Watch a directory for new torrents, and stop those that have been deleted
+        schedule2 = watch_directory, 1, 1, (cat,"load.start=",(cfg.watch),"*.torrent")
+        schedule2 = untied_directory, 5, 5, (cat,"stop_untied=",(cfg.watch),"*.torrent")
+        # Close torrents when diskspace is low
+        schedule2 = monitor_diskspace, 15, 60, ((close_low_diskspace,1000M))
+        method.set_key = event.download.erased,delete_erased,"execute=rm,-rf,--,$d.data_path="
+        
+        
+
+
+ingress:
+  main:
+    # -- Enables or disables the ingress
+    enabled: true
+
+    # -- Make this the primary ingress (used in probes, notes, etc...).
+    # If there is more than 1 ingress, make sure that only 1 ingress is marked as primary.
+    primary: true
+
+    # -- Override the name suffix that is used for this ingress.
+    nameOverride:
+
+    # -- Provide additional annotations which may be required.
+    annotations:
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+      traefik.ingress.kubernetes.io/router.middlewares: rtorrent-rutorrent-auth@kubernetescrd
+      # kubernetes.io/ingress.class: nginx
+      # kubernetes.io/tls-acme: "true"
+
+    # -- Provide additional labels which may be required.
+    labels: {}
+
+    # -- Set the ingressClass that is used for this ingress.
+    # Requires Kubernetes >=1.19
+    ingressClassName:  # "nginx"
+
+    ## Configure the hosts for the ingress
+    hosts:
+      -  # -- Host address. Helm template can be passed.
+        host: tr.nimas.li
+        ## Configure the paths for the host
+        paths:
+          -  # -- Path.  Helm template can be passed.
+            path: /
+            # -- Ignored if not kubeVersion >= 1.14-0
+            pathType: Prefix
+
+    # -- Configure TLS for the ingress. Both secretName and hosts can process a Helm template.
+    tls: []
+    #  - secretName: chart-example-tls
+    #    hosts:
+    #      - chart-example.local
+

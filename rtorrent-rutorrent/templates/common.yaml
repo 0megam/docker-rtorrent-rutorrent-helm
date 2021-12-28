@@ -1,0 +1,16 @@
+{{/* First Make sure all variables are set and merged properly */}}
+{{- include "common.values.setup" . }}
+
+{{/* Append the hardcoded settings */}}
+{{- define "rtorrent-rutorrent.settingsVolume" -}}
+enabled: true
+mountPath: /config
+type: "custom"
+volumeSpec:
+  configMap:
+    name: {{ include "common.names.fullname" . }}-config
+{{- end -}}
+{{- $_ := set .Values.persistence "rtorrent-rutorrent-config" (include "rtorrent-rutorrent.settingsVolume" . | fromYaml) -}}
+
+{{/* Render the templates */}}
+{{ include "common.all" . }}
